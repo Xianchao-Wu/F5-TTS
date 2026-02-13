@@ -51,8 +51,8 @@ tempfile_kwargs = {"delete_on_close": False} if sys.version_info >= (3, 12) else
 
 target_sample_rate = 24000
 n_mel_channels = 100
-hop_length = 256
-win_length = 1024
+hop_length = 256 # frame shift，帧移，stride，相邻两个分析帧之间，在时间轴上间隔的采样点数(samples)
+win_length = 1024 # window length，一个frame里面包括了1024个points。1st frame: [0, 1023], 2nd frame: [256, 1279], 3rd frame: [512, 1535]
 n_fft = 1024
 mel_spec_type = "vocos"
 target_rms = 0.1
@@ -378,7 +378,6 @@ def preprocess_ref_audio_text(ref_audio_orig, ref_text, show_info=print):
 
 # infer process: chunk text -> infer batches [i.e. infer_batch_process()]
 
-
 def infer_process(
     ref_audio,
     ref_text,
@@ -397,6 +396,7 @@ def infer_process(
     fix_duration=fix_duration,
     device=device,
 ):
+    import ipdb; ipdb.set_trace() # NOTE TODO
     # Split the input text into batches
     audio, sr = torchaudio.load(ref_audio)
     max_chars = int(len(ref_text.encode("utf-8")) / (audio.shape[-1] / sr) * (22 - audio.shape[-1] / sr) * speed)
@@ -429,7 +429,6 @@ def infer_process(
 
 # infer batches
 
-
 def infer_batch_process(
     ref_audio,
     ref_text,
@@ -449,16 +448,17 @@ def infer_batch_process(
     streaming=False,
     chunk_size=2048,
 ):
-    audio, sr = ref_audio
+    import ipdb; ipdb.set_trace() # NOTE TODO
+    audio, sr = ref_audio # (tensor([[ 0.0047, -0.0043,  0.0012,  ...,  0.0000,  0.0000,  0.0000]]), 16000); torch.Size([1, 45663]) and 16k are the two parameters of the reference audio
     if audio.shape[0] > 1:
         audio = torch.mean(audio, dim=0, keepdim=True)
 
-    rms = torch.sqrt(torch.mean(torch.square(audio)))
+    rms = torch.sqrt(torch.mean(torch.square(audio))) # tensor(0.0742) NOTE root mean square 这个的计算真的很不错啊
     if rms < target_rms:
-        audio = audio * target_rms / rms
-    if sr != target_sample_rate:
+        audio = audio * target_rms / rms # * 0.1/0.0742 = 1.3480 --> 1.3480 * audio
+    if sr != target_sample_rate: # 16000 != 24000
         resampler = torchaudio.transforms.Resample(sr, target_sample_rate)
-        audio = resampler(audio)
+        audio = resampler(audio) # 16k to 24k : torch.Size([1, 45663]) -> torch.Size([1, 68495])
     audio = audio.to(device)
 
     generated_waves = []
@@ -468,32 +468,34 @@ def infer_batch_process(
         ref_text = ref_text + " "
 
     def process_batch(gen_text):
+        import ipdb; ipdb.set_trace()
         local_speed = speed
         if len(gen_text.encode("utf-8")) < 10:
             local_speed = 0.3
 
         # Prepare the text
-        text_list = [ref_text + gen_text]
-        final_text_list = convert_char_to_pinyin(text_list)
+        text_list = [ref_text + gen_text] # NOTE ['希望你以后能够做的比我还好呦。那是当然的啦，我们都找到了自己的真正的幸福。'] 这是直接对ref_text和gen_text进行了拼接操作了，两个字符串，合并成为了一个字符串了. so what about after?
+        final_text_list = convert_char_to_pinyin(text_list) # [[' ', 'xi1', ' ', 'wang4', ' ', 'ni3', ' ', 'yi3', ' ', 'hou4', ' ', 'neng2', ' ', 'gou4', ' ', 'zuo4', ' ', 'de', ' ', 'bi3', ' ', 'wo3', ' ', 'hai2', ' ', 'hao3', ' ', 'you1', '。', ' ', 'na4', ' ', 'shi4', ' ', 'dang1', ' ', 'ran2', ' ', 'de', ' ', 'la', '，', ' ', 'wo3', ' ', 'men', ' ', 'dou1', ' ', 'zhao3', ' ', 'dao4', ' ', 'le', ' ', 'zi4', ' ', 'ji3', ' ', 'de', ' ', 'zhen1', ' ', 'zheng4', ' ', 'de', ' ', 'xing4', ' ', 'fu2', '。']] # TODO 需要注意的是这里，这里是用了full pinyin，而且每个full pinyin内部是带有声调的，而且外部是带有空格的。相当于说，一个完整的发音，例如you1，就是一个独立的'character', pay attention to this special character unit!
 
-        ref_audio_len = audio.shape[-1] // hop_length
+        ref_audio_len = audio.shape[-1] // hop_length # NOTE, 267 = 68495 // 256
         if fix_duration is not None:
             duration = int(fix_duration * target_sample_rate / hop_length)
         else:
             # Calculate duration
-            ref_text_len = len(ref_text.encode("utf-8"))
-            gen_text_len = len(gen_text.encode("utf-8"))
-            duration = ref_audio_len + int(ref_audio_len / ref_text_len * gen_text_len / local_speed)
+            ref_text_len = len(ref_text.encode("utf-8")) # 45 for '希望你以后能够做的比我还好呦。'
+            gen_text_len = len(gen_text.encode("utf-8")) # 66 for '那是当然的啦，我们都找到了自己的真正的幸福。'
+            duration = ref_audio_len + int(ref_audio_len / ref_text_len * gen_text_len / local_speed) # NOTE very important ，首先是ref语音的长度，267；然后，是 267 / 45 * 66 / local_speed=1.0，就是根据ref的语音和文本的比例，来近似推算一下当前的待生成的文本的对应的语音的长度，大概是多少的节奏，这个还是很不错的。例如，如果是唱歌的时候，那么我们的唱歌的语音/文本的比例，就可以影响在唱歌模式下的，一个待生成的文本对应的唱歌的语音的长度了. 267 + ?391.6 -> 391 = 658
 
         # inference
         with torch.inference_mode():
+            import ipdb; ipdb.set_trace()
             generated, _ = model_obj.sample(
-                cond=audio,
-                text=final_text_list,
-                duration=duration,
-                steps=nfe_step,
-                cfg_strength=cfg_strength,
-                sway_sampling_coef=sway_sampling_coef,
+                cond=audio, # torch.tensor with shape = [1, 68495]
+                text=final_text_list, # Line 478's value for reference
+                duration=duration, # 658, 参考语音的长度+推断出来的待生成的语音的长度
+                steps=nfe_step, # 32
+                cfg_strength=cfg_strength, # 2.0
+                sway_sampling_coef=sway_sampling_coef, # -1.0
             )
             del _
 
@@ -512,25 +514,35 @@ def infer_batch_process(
 
             if streaming:
                 for j in range(0, len(generated_wave), chunk_size):
-                    yield generated_wave[j : j + chunk_size], target_sample_rate
+                    # NOTE yield generated_wave[j : j + chunk_size], target_sample_rate
+                    return generated_wave[j : j + chunk_size], target_sample_rate
             else:
                 generated_cpu = generated[0].cpu().numpy()
                 del generated
-                yield generated_wave, generated_cpu
-
+                # NOTE yield generated_wave, generated_cpu
+                return generated_wave, generated_cpu
+    # NOTE for 'streaming':
     if streaming:
         for gen_text in progress.tqdm(gen_text_batches) if progress is not None else gen_text_batches:
             for chunk in process_batch(gen_text):
                 yield chunk
     else:
-        with ThreadPoolExecutor() as executor:
-            futures = [executor.submit(process_batch, gen_text) for gen_text in gen_text_batches]
-            for future in progress.tqdm(futures) if progress is not None else futures:
-                result = future.result()
-                if result:
-                    generated_wave, generated_mel_spec = next(result)
-                    generated_waves.append(generated_wave)
-                    spectrograms.append(generated_mel_spec)
+        if False: # NOTE debug only, the parallel inference algorithm is so good for learning in the future
+            with ThreadPoolExecutor() as executor:
+                futures = [executor.submit(process_batch, gen_text) for gen_text in gen_text_batches]
+                for future in progress.tqdm(futures) if progress is not None else futures:
+                    result = future.result()
+                    if result:
+                        generated_wave, generated_mel_spec = next(result)
+                        generated_waves.append(generated_wave)
+                        spectrograms.append(generated_mel_spec)
+
+        #### for debug only  NOTE TODO ####
+        for gen_text in gen_text_batches:
+            generated_wave, generated_mel_spec = process_batch(gen_text)
+            generated_waves.append(generated_wave)
+            spectrograms.append(generated_mel_spec)
+        #### end for debug only ####
 
         if generated_waves:
             if cross_fade_duration <= 0:

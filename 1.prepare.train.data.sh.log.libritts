@@ -1,0 +1,14 @@
+root@d50eefa518d4:/workspace/asr/F5-TTS# ./1.prepare.train.data.sh
+
+Prepare for LibriTTS_100_360_500_char, will save to /workspace/asr/F5-TTS/src/f5_tts/../../data/LibriTTS_100_360_500_char
+
+100%|██████████████████████████████████████████████████████████████| 3/3 [00:00<00:00,  5.34it/s]
+100%|███████████████████████████████████████████████████████| 2311/2311 [00:06<00:00, 337.54it/s]
+
+Saving to /workspace/asr/F5-TTS/src/f5_tts/../../data/LibriTTS_100_360_500_char ...
+Writing to raw.arrow ...: 100%|██████████████████████| 354218/354218 [00:01<00:00, 343542.34it/s]
+
+For LibriTTS_100_360_500_char, sample count: 354218
+For LibriTTS_100_360_500_char, vocab size is: 78
+For LibriTTS_100_360_500_char, total 554.09 hours
+

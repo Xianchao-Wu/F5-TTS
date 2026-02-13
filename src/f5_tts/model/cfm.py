@@ -83,9 +83,9 @@ class CFM(nn.Module):
     @torch.no_grad()
     def sample(
         self,
-        cond: float["b n d"] | float["b nw"],
-        text: int["b nt"] | list[str],
-        duration: int | int["b"],
+        cond: float["b n d"] | float["b nw"], # ref audio, [1, 68495] 
+        text: int["b nt"] | list[str], # [ref_text + gen_text]
+        duration: int | int["b"], # 658, ref audio len + estimated gen audio len
         *,
         lens: int["b"] | None = None,
         steps=32,
@@ -100,32 +100,33 @@ class CFM(nn.Module):
         t_inter=0.1,
         edit_mask=None,
     ):
+        import ipdb; ipdb.set_trace()
         self.eval()
         # raw wave
 
         if cond.ndim == 2:
-            cond = self.mel_spec(cond)
-            cond = cond.permute(0, 2, 1)
-            assert cond.shape[-1] == self.num_channels
+            cond = self.mel_spec(cond) # [1, 68495] --> torch.Size([1, 100, 268])
+            cond = cond.permute(0, 2, 1) # [1, 268=N=len, 100=F=feat of mel]
+            assert cond.shape[-1] == self.num_channels # 100
 
-        cond = cond.to(next(self.parameters()).dtype)
+        cond = cond.to(next(self.parameters()).dtype) # torch.float16
 
         batch, cond_seq_len, device = *cond.shape[:2], cond.device
         if not exists(lens):
-            lens = torch.full((batch,), cond_seq_len, device=device, dtype=torch.long)
+            lens = torch.full((batch,), cond_seq_len, device=device, dtype=torch.long) # tensor([268], device='cuda:0')
 
         # text
 
         if isinstance(text, list):
             if exists(self.vocab_char_map):
-                text = list_str_to_idx(text, self.vocab_char_map).to(device)
+                text = list_str_to_idx(text, self.vocab_char_map).to(device) # full pinyin -> id
             else:
                 text = list_str_to_tensor(text).to(device)
-            assert text.shape[0] == batch
+            assert text.shape[0] == batch # [1, 71]
 
         # duration
 
-        cond_mask = lens_to_mask(lens)
+        cond_mask = lens_to_mask(lens) # [1, 268] all True
         if edit_mask is not None:
             cond_mask = cond_mask & edit_mask
 
@@ -135,21 +136,21 @@ class CFM(nn.Module):
         duration = torch.maximum(
             torch.maximum((text != -1).sum(dim=-1), lens) + 1, duration
         )  # duration at least text/audio prompt length plus one token, so something is generated
-        duration = duration.clamp(max=max_duration)
+        duration = duration.clamp(max=max_duration) # max_duration=65536
         max_duration = duration.amax()
 
         # duplicate test corner for inner time step oberservation
         if duplicate_test:
             test_cond = F.pad(cond, (0, 0, cond_seq_len, max_duration - 2 * cond_seq_len), value=0.0)
 
-        cond = F.pad(cond, (0, 0, 0, max_duration - cond_seq_len), value=0.0)
+        cond = F.pad(cond, (0, 0, 0, max_duration - cond_seq_len), value=0.0) # 进来的时候，是cond.shape=[1, 268, 100] ref audio's mel spectrogram, ---> pad之后，是在最右边，增加了658-268个0，即得到的是[1, 658, 100]这个张量
         if no_ref_audio:
             cond = torch.zeros_like(cond)
 
-        cond_mask = F.pad(cond_mask, (0, max_duration - cond_mask.shape[-1]), value=False)
-        cond_mask = cond_mask.unsqueeze(-1)
+        cond_mask = F.pad(cond_mask, (0, max_duration - cond_mask.shape[-1]), value=False) # [1,268] all True --> [1,658] with False at the end
+        cond_mask = cond_mask.unsqueeze(-1) # [1, 658, 1]
         step_cond = torch.where(
-            cond_mask, cond, torch.zeros_like(cond)
+            cond_mask, cond, torch.zeros_like(cond) # TODO what is torch.where? step_cond == cond, yes
         )  # allow direct control (cut cond audio) with lens passed in
 
         if batch > 1:
@@ -162,7 +163,7 @@ class CFM(nn.Module):
         def fn(t, x):
             # at each step, conditioning is fixed
             # step_cond = torch.where(cond_mask, cond, torch.zeros_like(cond))
-
+            import ipdb; ipdb.set_trace() # NOTE TODO here
             # predict flow (cond)
             if cfg_strength < 1e-5:
                 pred = self.transformer(
@@ -197,8 +198,8 @@ class CFM(nn.Module):
         for dur in duration:
             if exists(seed):
                 torch.manual_seed(seed)
-            y0.append(torch.randn(dur, self.num_channels, device=self.device, dtype=step_cond.dtype))
-        y0 = pad_sequence(y0, padding_value=0, batch_first=True)
+            y0.append(torch.randn(dur, self.num_channels, device=self.device, dtype=step_cond.dtype)) # NOTE [658, 100] pure noise tensor, act as x0 in the paper of F5-TTS
+        y0 = pad_sequence(y0, padding_value=0, batch_first=True) # y0.shape=[1,658,100]
 
         t_start = 0
 
@@ -209,13 +210,13 @@ class CFM(nn.Module):
             steps = int(steps * (1 - t_start))
 
         if t_start == 0 and use_epss:  # use Empirically Pruned Step Sampling for low NFE
-            t = get_epss_timesteps(steps, device=self.device, dtype=step_cond.dtype)
+            t = get_epss_timesteps(steps, device=self.device, dtype=step_cond.dtype) # NOTE t.shape=[33], 一个等差数列
         else:
             t = torch.linspace(t_start, 1, steps + 1, device=self.device, dtype=step_cond.dtype)
         if sway_sampling_coef is not None:
-            t = t + sway_sampling_coef * (torch.cos(torch.pi / 2 * t) - 1 + t)
+            t = t + sway_sampling_coef * (torch.cos(torch.pi / 2 * t) - 1 + t) # NOTE 这里非常重要，这是sway sampling的 重要使用，摇摆采样; alike x^2了
 
-        trajectory = odeint(fn, y0, t, **self.odeint_kwargs)
+        trajectory = odeint(fn, y0, t, **self.odeint_kwargs) # NOTE TODO
         self.transformer.clear_cache()
 
         sampled = trajectory[-1]

@@ -174,6 +174,8 @@ parser.add_argument(
     type=str,
     help="Specify the device to run on",
 )
+
+import ipdb; ipdb.set_trace()
 args = parser.parse_args()
 
 
@@ -213,9 +215,9 @@ remove_silence = args.remove_silence or config.get("remove_silence", False)
 load_vocoder_from_local = args.load_vocoder_from_local or config.get("load_vocoder_from_local", False)
 
 vocoder_name = args.vocoder_name or config.get("vocoder_name", mel_spec_type)
-target_rms = args.target_rms or config.get("target_rms", target_rms)
+target_rms = args.target_rms or config.get("target_rms", target_rms) # NOTE rms = root mean square for loudness
 cross_fade_duration = args.cross_fade_duration or config.get("cross_fade_duration", cross_fade_duration)
-nfe_step = args.nfe_step or config.get("nfe_step", nfe_step)
+nfe_step = args.nfe_step or config.get("nfe_step", nfe_step) # number of feature evaluation for number of forward calls in inference algorithm such as Euler algorithm
 cfg_strength = args.cfg_strength or config.get("cfg_strength", cfg_strength)
 sway_sampling_coef = args.sway_sampling_coef or config.get("sway_sampling_coef", sway_sampling_coef)
 speed = args.speed or config.get("speed", speed)
@@ -243,7 +245,7 @@ if gen_file:
 
 # output path
 
-wave_path = Path(output_dir) / output_file
+wave_path = Path(output_dir) / output_file # PosixPath('tests/infer_cli_basic.wav') 保存生成的音频文件 NOTE, 这个是从config文件里面读取的，目前命令行里没有输入
 # spectrogram_path = Path(output_dir) / "infer_cli_out.png"
 if save_chunk:
     output_chunk_dir = os.path.join(output_dir, f"{Path(output_file).stem}_chunks")
@@ -254,7 +256,8 @@ if save_chunk:
 # load vocoder
 
 if vocoder_name == "vocos":
-    vocoder_local_path = "../checkpoints/vocos-mel-24khz"
+    #vocoder_local_path = "../checkpoints/vocos-mel-24khz"
+    vocoder_local_path = "./ckpts/vocos-mel-24khz"
 elif vocoder_name == "bigvgan":
     vocoder_local_path = "../checkpoints/bigvgan_v2_24khz_100band_256x"
 
@@ -264,12 +267,13 @@ vocoder = load_vocoder(
 
 
 # load TTS model
+import ipdb; ipdb.set_trace()
 
 model_cfg = OmegaConf.load(
     args.model_cfg or config.get("model_cfg", str(files("f5_tts").joinpath(f"configs/{model}.yaml")))
 )
-model_cls = get_class(f"f5_tts.model.{model_cfg.model.backbone}")
-model_arc = model_cfg.model.arch
+model_cls = get_class(f"f5_tts.model.{model_cfg.model.backbone}") # 'DiT' - <class 'f5_tts.model.backbones.dit.DiT'>
+model_arc = model_cfg.model.arch # architecture parameters: {'dim': 1024, 'depth': 22, 'heads': 16, 'ff_mult': 2, 'text_dim': 512, 'text_mask_padding': True, 'qk_norm': None, 'conv_layers': 4, 'pe_attn_head': None, 'attn_backend': 'torch', 'attn_mask_enabled': False, 'checkpoint_activations': False}
 
 repo_name, ckpt_step, ckpt_type = "F5-TTS", 1250000, "safetensors"
 
@@ -294,8 +298,8 @@ elif ckpt_file.startswith("hf://"):
 
 if vocab_file.startswith("hf://"):
     vocab_file = str(cached_path(vocab_file))
-
-print(f"Using {model}...")
+import ipdb; ipdb.set_trace()
+print(f"Using {model}...") # NOTE load the model here:
 ema_model = load_model(
     model_cls, model_arc, ckpt_file, mel_spec_type=vocoder_name, vocab_file=vocab_file, device=device
 )
@@ -305,6 +309,7 @@ ema_model = load_model(
 
 
 def main():
+    import ipdb; ipdb.set_trace() # 看着逻辑是，先初始化一些参数，导入模型，然后再到这里，继续搞事情
     main_voice = {"ref_audio": ref_audio, "ref_text": ref_text}
     if "voices" not in config:
         voices = {"main": main_voice}
@@ -341,6 +346,7 @@ def main():
         local_speed = voices[voice].get("speed", speed)
         gen_text_ = text.strip()
         print(f"Voice: {voice}")
+        import ipdb; ipdb.set_trace() # NOTE very important here:
         audio_segment, final_sample_rate, spectrogram = infer_process(
             ref_audio_,
             ref_text_,
@@ -386,3 +392,135 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+'''
+ipdb> ema_model
+CFM(
+  (mel_spec): MelSpec()
+  (transformer): DiT(
+    (time_embed): TimestepEmbedding(
+      (time_embed): SinusPositionEmbedding()
+      (time_mlp): Sequential(
+        (0): Linear(in_features=256, out_features=1024, bias=True)
+        (1): SiLU()
+        (2): Linear(in_features=1024, out_features=1024, bias=True)
+      )
+    )
+    (text_embed): TextEmbedding(
+      (text_embed): Embedding(2546, 512)
+      (text_blocks): Sequential(
+        (0): ConvNeXtV2Block(
+          (dwconv): Conv1d(512, 512, kernel_size=(7,), stride=(1,), padding=(3,), groups=512)
+          (norm): LayerNorm((512,), eps=1e-06, elementwise_affine=True)
+          (pwconv1): Linear(in_features=512, out_features=1024, bias=True)
+          (act): GELU(approximate='none')
+          (grn): GRN()
+          (pwconv2): Linear(in_features=1024, out_features=512, bias=True)
+        )
+        (1): ConvNeXtV2Block(
+          (dwconv): Conv1d(512, 512, kernel_size=(7,), stride=(1,), padding=(3,), groups=512)
+          (norm): LayerNorm((512,), eps=1e-06, elementwise_affine=True)
+          (pwconv1): Linear(in_features=512, out_features=1024, bias=True)
+          (act): GELU(approximate='none')
+          (grn): GRN()
+          (pwconv2): Linear(in_features=1024, out_features=512, bias=True)
+        )
+        (2): ConvNeXtV2Block(
+          (dwconv): Conv1d(512, 512, kernel_size=(7,), stride=(1,), padding=(3,), groups=512)
+          (norm): LayerNorm((512,), eps=1e-06, elementwise_affine=True)
+          (pwconv1): Linear(in_features=512, out_features=1024, bias=True)
+          (act): GELU(approximate='none')
+          (grn): GRN()
+          (pwconv2): Linear(in_features=1024, out_features=512, bias=True)
+        )
+        (3): ConvNeXtV2Block(
+          (dwconv): Conv1d(512, 512, kernel_size=(7,), stride=(1,), padding=(3,), groups=512)
+          (norm): LayerNorm((512,), eps=1e-06, elementwise_affine=True)
+          (pwconv1): Linear(in_features=512, out_features=1024, bias=True)
+          (act): GELU(approximate='none')
+          (grn): GRN()
+          (pwconv2): Linear(in_features=1024, out_features=512, bias=True)
+        )
+      )
+    )
+    (input_embed): InputEmbedding(
+      (proj): Linear(in_features=712, out_features=1024, bias=True)
+      (conv_pos_embed): ConvPositionEmbedding(
+        (conv1d): Sequential(
+          (0): Conv1d(1024, 1024, kernel_size=(31,), stride=(1,), padding=(15,), groups=16)
+          (1): Mish()
+          (2): Conv1d(1024, 1024, kernel_size=(31,), stride=(1,), padding=(15,), groups=16)
+          (3): Mish()
+        )
+      )
+    )
+    (rotary_embed): RotaryEmbedding()
+    (transformer_blocks): ModuleList(
+      (0-21): 22 x DiTBlock(
+        (attn_norm): AdaLayerNorm(
+          (silu): SiLU()
+          (linear): Linear(in_features=1024, out_features=6144, bias=True)
+          (norm): LayerNorm((1024,), eps=1e-06, elementwise_affine=False)
+        )
+        (attn): Attention(
+          (to_q): Linear(in_features=1024, out_features=1024, bias=True)
+          (to_k): Linear(in_features=1024, out_features=1024, bias=True)
+          (to_v): Linear(in_features=1024, out_features=1024, bias=True)
+          (to_out): ModuleList(
+            (0): Linear(in_features=1024, out_features=1024, bias=True)
+            (1): Dropout(p=0.1, inplace=False)
+          )
+        )
+        (ff_norm): LayerNorm((1024,), eps=1e-06, elementwise_affine=False)
+        (ff): FeedForward(
+          (ff): Sequential(
+            (0): Sequential(
+              (0): Linear(in_features=1024, out_features=2048, bias=True)
+              (1): GELU(approximate='tanh')
+            )
+            (1): Dropout(p=0.1, inplace=False)
+            (2): Linear(in_features=2048, out_features=1024, bias=True)
+          )
+        )
+      )
+    )
+    (norm_out): AdaLayerNorm_Final(
+      (silu): SiLU()
+      (linear): Linear(in_features=1024, out_features=2048, bias=True)
+      (norm): LayerNorm((1024,), eps=1e-06, elementwise_affine=False)
+    )
+    (proj_out): Linear(in_features=1024, out_features=100, bias=True)
+  )
+)
+
+'''
+
+'''
+ipdb> vocoder
+Vocos(
+  (feature_extractor): MelSpectrogramFeatures(
+    (mel_spec): MelSpectrogram(
+      (spectrogram): Spectrogram()
+      (mel_scale): MelScale()
+    )
+  )
+  (backbone): VocosBackbone(
+    (embed): Conv1d(100, 512, kernel_size=(7,), stride=(1,), padding=(3,))
+    (norm): LayerNorm((512,), eps=1e-06, elementwise_affine=True)
+    (convnext): ModuleList(
+      (0-7): 8 x ConvNeXtBlock(
+        (dwconv): Conv1d(512, 512, kernel_size=(7,), stride=(1,), padding=(3,), groups=512)
+        (norm): LayerNorm((512,), eps=1e-06, elementwise_affine=True)
+        (pwconv1): Linear(in_features=512, out_features=1536, bias=True)
+        (act): GELU(approximate='none')
+        (pwconv2): Linear(in_features=1536, out_features=512, bias=True)
+      )
+    )
+    (final_layer_norm): LayerNorm((512,), eps=1e-06, elementwise_affine=True)
+  )
+  (head): ISTFTHead(
+    (out): Linear(in_features=512, out_features=1026, bias=True)
+    (istft): ISTFT()
+  )
+)
+'''
