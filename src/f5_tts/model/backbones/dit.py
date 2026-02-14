@@ -89,7 +89,7 @@ class TextEmbedding(nn.Module):
         text = F.pad(text, (0, seq_len - text.shape[1]), value=0)  # (opt.) if not self.average_upsampling:
         if self.mask_padding:
             text_mask = text == 0
-
+        import ipdb; ipdb.set_trace() # NOTE TODO 所以，这里，drop_text是的确把text设置为0了。
         if drop_text:  # cfg for text
             text = torch.zeros_like(text)
 
@@ -126,19 +126,19 @@ class InputEmbedding(nn.Module):
 
     def forward(
         self,
-        x: float["b n d"],
-        cond: float["b n d"],
-        text_embed: float["b n d"],
-        drop_audio_cond=False,
-        audio_mask: bool["b n"] | None = None,
+        x: float["b n d"], # noisy audio, [1, 658, 100]
+        cond: float["b n d"], # ref audio + 0 of to-be-gen audio, [1, 658, 100]
+        text_embed: float["b n d"], # only the first 71 is with value, [1, 658, 100]
+        drop_audio_cond=False, # False
+        audio_mask: bool["b n"] | None = None, # None
     ):
-        if drop_audio_cond:  # cfg for cond audio
-            cond = torch.zeros_like(cond)
+        if drop_audio_cond:  # cfg for cond audio; False
+            cond = torch.zeros_like(cond) # [1, 658, 100] all 0
 
-        x = self.proj(torch.cat((x, cond, text_embed), dim=-1))
+        x = self.proj(torch.cat((x, cond, text_embed), dim=-1)) # NOTE TODO noisy_audio ref_audio+gen_audio text_embed --> [1, 658, 100], [1, 658, 100], [1, 658, 512] --> [1, 658, 712] --> 712 to 1024 --> [1, 658, 1024]
         x = self.conv_pos_embed(x, mask=audio_mask) + x
-        return x
-
+        return x # [1, 658, 1024]
+        # NOTE when drop_audio_cond, 只有中间的ref_audio is all 0 --> no --> Line 94 文本也是被设置为了0了！！！
 
 # Transformer backbone using DiT blocks
 
@@ -233,9 +233,9 @@ class DiT(nn.Module):
 
     def get_input_embed(
         self,
-        x,  # b n d
-        cond,  # b n d
-        text,  # b nt
+        x,  # b n d, noisy audio, [1, 658, 100]
+        cond,  # b n d, ref audio + 0 for to-be-gen audio [1, 658, 100]
+        text,  # b nt, [1, 71]
         drop_audio_cond: bool = False,
         drop_text: bool = False,
         cache: bool = True,
@@ -243,7 +243,7 @@ class DiT(nn.Module):
     ):
         if self.text_uncond is None or self.text_cond is None or not cache:
             if audio_mask is None:
-                text_embed = self.text_embed(text, x.shape[1], drop_text=drop_text)
+                text_embed = self.text_embed(text, x.shape[1], drop_text=drop_text) # NOTE 重要，这里是4层convnextv2 blocks，用于对文本进行embedding; text: from [1, 71] to [1, 658, 512], 这里是让文本的长度71，更新为了目标audio的mel frame的长度658; 这个长度658里面，只有前面的71个位置上有取值，后面的都是0！
             else:
                 batch = x.shape[0]
                 seq_lens = audio_mask.sum(dim=1)  # Calculate the actual sequence length for each sample
@@ -266,64 +266,65 @@ class DiT(nn.Module):
             if drop_text:
                 text_embed = self.text_uncond
             else:
-                text_embed = self.text_cond
-
+                text_embed = self.text_cond # [1, 658, 512]
+        import ipdb; ipdb.set_trace()
         x = self.input_embed(x, cond, text_embed, drop_audio_cond=drop_audio_cond, audio_mask=audio_mask)
-
-        return x
+        # x=noised audio [1, 658, 100]; cond=ref audio + to-be-gen audio [1, 658, 100]; text_embed of [1, 658, 100] and only first 71 elements are with value; drop_audio_cond=False; audio_mask=None
+        return x # x.shape=[1, 658, 1024], 这是按照最后一个dim对三个张量进行拼接!
 
     def clear_cache(self):
         self.text_cond, self.text_uncond = None, None
-
     def forward(
         self,
-        x: float["b n d"],  # nosied input audio
-        cond: float["b n d"],  # masked cond audio
-        text: int["b nt"],  # text
-        time: float["b"] | float[""],  # time step
-        mask: bool["b n"] | None = None,
-        drop_audio_cond: bool = False,  # cfg for cond audio
-        drop_text: bool = False,  # cfg for text
-        cfg_infer: bool = False,  # cfg inference, pack cond & uncond forward
-        cache: bool = False,
+        x: float["b n d"],  # noised input audio 带噪声的语音张量, [1, 658, 100]
+        cond: float["b n d"],  # masked cond audio, [1, 658, 100], 左边是268个mel frames，ref audio的；右边是390个全0的mel frames
+        text: int["b nt"],  # text, shape=[1, 71]
+        time: float["b"] | float[""],  # time step, e.g., tensor(0., device='cuda:0', dtype=torch.float16)
+        mask: bool["b n"] | None = None, # batch seq len mask, 当前为None
+        drop_audio_cond: bool = False,  # cfg for cond audio; False
+        drop_text: bool = False,  # cfg for text; False; 只有当采用了cfg=classifier-free guidance的时候，才有drop_text=True NOTE TODO
+        cfg_infer: bool = False,  # cfg inference, pack cond & uncond forward; True
+        cache: bool = False, # True
     ):
-        batch, seq_len = x.shape[0], x.shape[1]
+        import ipdb; ipdb.set_trace()
+        batch, seq_len = x.shape[0], x.shape[1] # 1, 658
         if time.ndim == 0:
-            time = time.repeat(batch)
+            time = time.repeat(batch) # tensor(0., device='cuda:0', dtype=torch.float16) --> tensor([0.], device='cuda:0', dtype=torch.float16)
 
         # t: conditioning time, text: text, x: noised audio + cond audio + text
-        t = self.time_embed(time)
+        t = self.time_embed(time) # NOTE embed time, from shape=[1] to [1, 1024]
         if cfg_infer:  # pack cond & uncond forward: b n d -> 2b n d
             x_cond = self.get_input_embed(
                 x, cond, text, drop_audio_cond=False, drop_text=False, cache=cache, audio_mask=mask
-            )
+            ) # x=noised audio [1,658,100]; cond=masked cond audio [1,658,100] with 268 ref mel frames and 390 all-0 mel frames; text=[1,71] --> x_cond.shape=[1, 658, 712=100+100+512 for noisy audio, ref_audio+gen_audio, text_embed] 
             x_uncond = self.get_input_embed(
                 x, cond, text, drop_audio_cond=True, drop_text=True, cache=cache, audio_mask=mask
-            )
-            x = torch.cat((x_cond, x_uncond), dim=0)
-            t = torch.cat((t, t), dim=0)
-            mask = torch.cat((mask, mask), dim=0) if mask is not None else None
+            ) # NOTE TODO 上面的drop_text没有起到作用啊... 只有drop_audio_cond的时候，被设置为0了
+            x = torch.cat((x_cond, x_uncond), dim=0) # [1, 658, 1024] + [1, 658, 1024] -> [2, 658, 1024]
+            t = torch.cat((t, t), dim=0) # [2, 1024]
+            mask = torch.cat((mask, mask), dim=0) if mask is not None else None # mask=None
         else:
             x = self.get_input_embed(
                 x, cond, text, drop_audio_cond=drop_audio_cond, drop_text=drop_text, cache=cache, audio_mask=mask
             )
-
-        rope = self.rotary_embed.forward_from_seq_len(seq_len)
+        import ipdb; ipdb.set_trace()
+        rope = self.rotary_embed.forward_from_seq_len(seq_len) # seq_len=658, -> rope[0].shape=[1, 658, 64]
 
         if self.long_skip_connection is not None:
             residual = x
-
-        for block in self.transformer_blocks:
-            if self.checkpoint_activations:
+        import ipdb; ipdb.set_trace()
+        # block = <class 'f5_tts.model.modules.DiTBlock'>
+        for block in self.transformer_blocks: # NOTE 22 blocks: AdaLayerNorm + self-Attention + LayerNorm + FeedForward
+            if self.checkpoint_activations: # NOTE TODO False
                 # https://pytorch.org/docs/stable/checkpoint.html#torch.utils.checkpoint.checkpoint
                 x = torch.utils.checkpoint.checkpoint(self.ckpt_wrapper(block), x, t, mask, rope, use_reentrant=False)
             else:
-                x = block(x, t, mask=mask, rope=rope)
-
+                x = block(x, t, mask=mask, rope=rope) # x.shape=[2, 658, 1024], t.shape=[2, 1024], mask=None, rope[0].shape=[1, 658, 64] --> output x.shape=[2, 658, 1024]
+        import ipdb; ipdb.set_trace()
         if self.long_skip_connection is not None:
             x = self.long_skip_connection(torch.cat((x, residual), dim=-1))
-
+        import ipdb; ipdb.set_trace()
         x = self.norm_out(x, t)
-        output = self.proj_out(x)
+        output = self.proj_out(x) # Linear(in_features=1024, out_features=100, bias=True), from 1024 to 100 (mel dim)
 
-        return output
+        return output # [2, 658, 100]

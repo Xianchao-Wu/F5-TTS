@@ -681,6 +681,8 @@ class DiTBlock(nn.Module):
         self.ff = FeedForward(dim=dim, mult=ff_mult, dropout=dropout, approximate="tanh")
 
     def forward(self, x, t, mask=None, rope=None):  # x: noised input, t: time embedding
+        import ipdb; ipdb.set_trace()
+
         # pre-norm & modulation for attention input
         norm, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.attn_norm(x, emb=t)
 

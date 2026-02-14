@@ -398,31 +398,31 @@ def infer_process(
 ):
     import ipdb; ipdb.set_trace() # NOTE TODO
     # Split the input text into batches
-    audio, sr = torchaudio.load(ref_audio)
-    max_chars = int(len(ref_text.encode("utf-8")) / (audio.shape[-1] / sr) * (22 - audio.shape[-1] / sr) * speed)
-    gen_text_batches = chunk_text(gen_text, max_chars=max_chars)
+    audio, sr = torchaudio.load(ref_audio) # torch.Size([1, 45663]), sr=16000
+    max_chars = int(len(ref_text.encode("utf-8")) / (audio.shape[-1] / sr) * (22 - audio.shape[-1] / sr) * speed) # 301
+    gen_text_batches = chunk_text(gen_text, max_chars=max_chars) # ['那是当然的啦，我们都找到了自己的真正的幸福。']
     for i, gen_text in enumerate(gen_text_batches):
-        print(f"gen_text {i}", gen_text)
+        print(f"gen_text {i}", gen_text) # gen_text 0 那是当然的啦，我们都找到了自己的真正的幸福。
     print("\n")
 
     show_info(f"Generating audio in {len(gen_text_batches)} batches...")
     return next(
         infer_batch_process(
-            (audio, sr),
-            ref_text,
-            gen_text_batches,
-            model_obj,
-            vocoder,
-            mel_spec_type=mel_spec_type,
-            progress=progress,
-            target_rms=target_rms,
-            cross_fade_duration=cross_fade_duration,
-            nfe_step=nfe_step,
-            cfg_strength=cfg_strength,
-            sway_sampling_coef=sway_sampling_coef,
-            speed=speed,
-            fix_duration=fix_duration,
-            device=device,
+            (audio, sr), # audio.shape=[1, 45663], sr=16000
+            ref_text, # '希望你以后能够做的比我还好呦。'
+            gen_text_batches, # ['那是当然的啦，我们都找到了自己的真正的幸福。']
+            model_obj, # <class 'f5_tts.model.cfm.CFM'>
+            vocoder, # <class 'vocos.pretrained.Vocos'>
+            mel_spec_type=mel_spec_type, # 'vocos'
+            progress=progress, # <module 'tqdm' from '/usr/local/lib/python3.10/dist-packages/tqdm/__init__.py'>
+            target_rms=target_rms, # 0.1
+            cross_fade_duration=cross_fade_duration, # 0.15
+            nfe_step=nfe_step, # 32
+            cfg_strength=cfg_strength, # 2.0
+            sway_sampling_coef=sway_sampling_coef, # -1.0
+            speed=speed, # 1.0
+            fix_duration=fix_duration, # None
+            device=device, # 'cuda'
         )
     )
 
@@ -454,10 +454,10 @@ def infer_batch_process(
         audio = torch.mean(audio, dim=0, keepdim=True)
 
     rms = torch.sqrt(torch.mean(torch.square(audio))) # tensor(0.0742) NOTE root mean square 这个的计算真的很不错啊
-    if rms < target_rms:
+    if rms < target_rms: # 0.0742 < 0.1, in
         audio = audio * target_rms / rms # * 0.1/0.0742 = 1.3480 --> 1.3480 * audio
     if sr != target_sample_rate: # 16000 != 24000
-        resampler = torchaudio.transforms.Resample(sr, target_sample_rate)
+        resampler = torchaudio.transforms.Resample(sr, target_sample_rate) # sr=16000, 24000=target_sample_rate
         audio = resampler(audio) # 16k to 24k : torch.Size([1, 45663]) -> torch.Size([1, 68495])
     audio = audio.to(device)
 
@@ -469,32 +469,32 @@ def infer_batch_process(
 
     def process_batch(gen_text):
         import ipdb; ipdb.set_trace()
-        local_speed = speed
-        if len(gen_text.encode("utf-8")) < 10:
+        local_speed = speed # 1.0
+        if len(gen_text.encode("utf-8")) < 10: # 66 > 10
             local_speed = 0.3
 
         # Prepare the text
         text_list = [ref_text + gen_text] # NOTE ['希望你以后能够做的比我还好呦。那是当然的啦，我们都找到了自己的真正的幸福。'] 这是直接对ref_text和gen_text进行了拼接操作了，两个字符串，合并成为了一个字符串了. so what about after?
         final_text_list = convert_char_to_pinyin(text_list) # [[' ', 'xi1', ' ', 'wang4', ' ', 'ni3', ' ', 'yi3', ' ', 'hou4', ' ', 'neng2', ' ', 'gou4', ' ', 'zuo4', ' ', 'de', ' ', 'bi3', ' ', 'wo3', ' ', 'hai2', ' ', 'hao3', ' ', 'you1', '。', ' ', 'na4', ' ', 'shi4', ' ', 'dang1', ' ', 'ran2', ' ', 'de', ' ', 'la', '，', ' ', 'wo3', ' ', 'men', ' ', 'dou1', ' ', 'zhao3', ' ', 'dao4', ' ', 'le', ' ', 'zi4', ' ', 'ji3', ' ', 'de', ' ', 'zhen1', ' ', 'zheng4', ' ', 'de', ' ', 'xing4', ' ', 'fu2', '。']] # TODO 需要注意的是这里，这里是用了full pinyin，而且每个full pinyin内部是带有声调的，而且外部是带有空格的。相当于说，一个完整的发音，例如you1，就是一个独立的'character', pay attention to this special character unit!
 
-        ref_audio_len = audio.shape[-1] // hop_length # NOTE, 267 = 68495 // 256
+        ref_audio_len = audio.shape[-1] // hop_length # NOTE, 267 = 68495 // 256, 相当于说ref audio里面有267个mel frames
         if fix_duration is not None:
             duration = int(fix_duration * target_sample_rate / hop_length)
         else:
             # Calculate duration
             ref_text_len = len(ref_text.encode("utf-8")) # 45 for '希望你以后能够做的比我还好呦。'
             gen_text_len = len(gen_text.encode("utf-8")) # 66 for '那是当然的啦，我们都找到了自己的真正的幸福。'
-            duration = ref_audio_len + int(ref_audio_len / ref_text_len * gen_text_len / local_speed) # NOTE very important ，首先是ref语音的长度，267；然后，是 267 / 45 * 66 / local_speed=1.0，就是根据ref的语音和文本的比例，来近似推算一下当前的待生成的文本的对应的语音的长度，大概是多少的节奏，这个还是很不错的。例如，如果是唱歌的时候，那么我们的唱歌的语音/文本的比例，就可以影响在唱歌模式下的，一个待生成的文本对应的唱歌的语音的长度了. 267 + ?391.6 -> 391 = 658
+            duration = ref_audio_len + int(ref_audio_len / ref_text_len * gen_text_len / local_speed) # 658=267+391, NOTE very important ，首先是ref语音的长度，267；然后，是 267 / 45 * 66 / local_speed=1.0，就是根据ref的语音和文本的比例，来近似推算一下当前的待生成的文本的对应的语音的长度，大概是多少的节奏，这个还是很不错的。例如，如果是唱歌的时候，那么我们的唱歌的语音/文本的比例，就可以影响在唱歌模式下的，一个待生成的文本对应的唱歌的语音的长度了. 267 + ?391.6 -> 391 = 658
 
         # inference
         with torch.inference_mode():
             import ipdb; ipdb.set_trace()
             generated, _ = model_obj.sample(
-                cond=audio, # torch.tensor with shape = [1, 68495]
-                text=final_text_list, # Line 478's value for reference
-                duration=duration, # 658, 参考语音的长度+推断出来的待生成的语音的长度
+                cond=audio, # torch.tensor with shape = [1, 68495], with sampling rate=24k, the reference audio
+                text=final_text_list, # 参考Line 478's value for reference
+                duration=duration, # 658, 参考语音的长度267 + 推断出来的待生成的语音的长度391
                 steps=nfe_step, # 32
-                cfg_strength=cfg_strength, # 2.0
+                cfg_strength=cfg_strength, # 2.0, classifier-free guidance
                 sway_sampling_coef=sway_sampling_coef, # -1.0
             )
             del _
@@ -538,7 +538,7 @@ def infer_batch_process(
                         spectrograms.append(generated_mel_spec)
 
         #### for debug only  NOTE TODO ####
-        for gen_text in gen_text_batches:
+        for gen_text in gen_text_batches: # ['那是当然的啦，我们都找到了自己的真正的幸福。']
             generated_wave, generated_mel_spec = process_batch(gen_text)
             generated_waves.append(generated_wave)
             spectrograms.append(generated_mel_spec)

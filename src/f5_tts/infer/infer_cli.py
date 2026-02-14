@@ -348,20 +348,20 @@ def main():
         print(f"Voice: {voice}")
         import ipdb; ipdb.set_trace() # NOTE very important here:
         audio_segment, final_sample_rate, spectrogram = infer_process(
-            ref_audio_,
-            ref_text_,
-            gen_text_,
-            ema_model,
-            vocoder,
-            mel_spec_type=vocoder_name,
-            target_rms=target_rms,
-            cross_fade_duration=cross_fade_duration,
-            nfe_step=nfe_step,
-            cfg_strength=cfg_strength,
-            sway_sampling_coef=sway_sampling_coef,
-            speed=local_speed,
-            fix_duration=fix_duration,
-            device=device,
+            ref_audio_, # '/tmp/tmp726iz92m.wav', the ref wav filename with path
+            ref_text_, # '希望你以后能够做的比我还好呦。'
+            gen_text_, # '那是当然的啦，我们都找到了自己的真正的幸福。'
+            ema_model, # <class 'f5_tts.model.cfm.CFM'>, model size=337,096,804=337M parameters
+            vocoder, # <class 'vocos.pretrained.Vocos'>, model size=13,531,650=13M parameters
+            mel_spec_type=vocoder_name, # 'vocos'
+            target_rms=target_rms, # 0.1
+            cross_fade_duration=cross_fade_duration, # 0.15, NOTE TODO what for? 交叉淡化时长, 在两段语音拼接时，用多长时间（或多少帧）对前一段音频逐渐减弱，同时对后一段音频逐渐增强，从而避免“咔嗒声”或突变。
+            nfe_step=nfe_step, # 32, number of feature evaluation, forward call times
+            cfg_strength=cfg_strength, # 2.0
+            sway_sampling_coef=sway_sampling_coef, # -1.0
+            speed=local_speed, # 1.0
+            fix_duration=fix_duration, # None
+            device=device, # 'cuda'
         )
         generated_audio_segments.append(audio_segment)
 
