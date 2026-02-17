@@ -234,15 +234,16 @@ def load_checkpoint(model, ckpt_path, device: str, dtype=None, use_ema=True):
 
 
 def load_model(
-    model_cls,
-    model_cfg,
-    ckpt_path,
-    mel_spec_type=mel_spec_type,
-    vocab_file="",
-    ode_method=ode_method,
+    model_cls, # <class 'f5_tts.model.backbones.dit.DiT'>
+    model_cfg, # {'dim': 1024, 'depth': 22, 'heads': 16, 'ff_mult': 2, 'text_dim': 512, 'text_mask_padding': True, 'qk_norm': None, 'conv_layers': 4, 'pe_attn_head': None, 'attn_backend': 'torch', 'attn_mask_enabled': False, 'checkpoint_activations': False}
+    ckpt_path, # /workspace/asr/F5-TTS/ckpts/F5TTS_v1_Base/model_1250000.safetensors
+    mel_spec_type=mel_spec_type, # 'vocos'
+    vocab_file="", # /workspace/asr/F5-TTS/ckpts/F5TTS_v1_Base/vocab.txt
+    ode_method=ode_method, # 'euler'
     use_ema=True,
-    device=device,
+    device=device, # 'cuda'
 ):
+    import ipdb; ipdb.set_trace()
     if vocab_file == "":
         vocab_file = str(files("f5_tts").joinpath("infer/examples/vocab.txt"))
     tokenizer = "custom"
@@ -251,28 +252,35 @@ def load_model(
     print("token : ", tokenizer)
     print("model : ", ckpt_path, "\n")
 
-    vocab_char_map, vocab_size = get_tokenizer(vocab_file, tokenizer)
+    vocab_char_map, vocab_size = get_tokenizer(vocab_file, tokenizer) # vocab_size=2545; 其中的2545个元素为：' ':0 ... '𠮶':2544
     model = CFM(
-        transformer=model_cls(**model_cfg, text_num_embeds=vocab_size, mel_dim=n_mel_channels),
+        transformer=model_cls(**model_cfg, text_num_embeds=vocab_size, mel_dim=n_mel_channels), # n_mel_channels=100
         mel_spec_kwargs=dict(
-            n_fft=n_fft,
-            hop_length=hop_length,
-            win_length=win_length,
-            n_mel_channels=n_mel_channels,
-            target_sample_rate=target_sample_rate,
-            mel_spec_type=mel_spec_type,
+            n_fft=n_fft, # 1024
+            hop_length=hop_length, # 256
+            win_length=win_length, # 1024
+            n_mel_channels=n_mel_channels, # 100
+            target_sample_rate=target_sample_rate, # 24000
+            mel_spec_type=mel_spec_type, # 'vocos'
         ),
         odeint_kwargs=dict(
-            method=ode_method,
+            method=ode_method, # 'euler'
         ),
         vocab_char_map=vocab_char_map,
     ).to(device)
 
     dtype = torch.float32 if mel_spec_type == "bigvgan" else None
     model = load_checkpoint(model, ckpt_path, device, dtype=dtype, use_ema=use_ema)
-
+    import ipdb; ipdb.set_trace()
     return model
-
+    # in model.transformer: 
+    # 1. time_embed : TimestepEmbedding
+    # 2. text_embed : TextEmbedding
+    # 3. input_embed : InputEmbedding
+    # 4. rotary_embed : RotaryEmbedding
+    # 5. transformer_blocks : ModuleList
+    # 6. norm_out : AdaLayerNorm_Final
+    # 7. proj_out : Linear
 
 def remove_silence_edges(audio, silence_threshold=-42):
     # Remove silence from the start
@@ -449,7 +457,7 @@ def infer_batch_process(
     chunk_size=2048,
 ):
     import ipdb; ipdb.set_trace() # NOTE TODO
-    audio, sr = ref_audio # (tensor([[ 0.0047, -0.0043,  0.0012,  ...,  0.0000,  0.0000,  0.0000]]), 16000); torch.Size([1, 45663]) and 16k are the two parameters of the reference audio
+    audio, sr = ref_audio # (tensor([[ 0.0047, -0.0043,  0.0012,  ...,  0.0000,  0.0000,  0.0000]]), 16000); ref_audio[0].shape=torch.Size([1, 45663]) and 16k are the two parameters of the reference audio
     if audio.shape[0] > 1:
         audio = torch.mean(audio, dim=0, keepdim=True)
 
@@ -489,7 +497,7 @@ def infer_batch_process(
         # inference
         with torch.inference_mode():
             import ipdb; ipdb.set_trace()
-            generated, _ = model_obj.sample(
+            generated, _ = model_obj.sample( # NOTE TODO 
                 cond=audio, # torch.tensor with shape = [1, 68495], with sampling rate=24k, the reference audio
                 text=final_text_list, # 参考Line 478's value for reference
                 duration=duration, # 658, 参考语音的长度267 + 推断出来的待生成的语音的长度391
@@ -497,30 +505,30 @@ def infer_batch_process(
                 cfg_strength=cfg_strength, # 2.0, classifier-free guidance
                 sway_sampling_coef=sway_sampling_coef, # -1.0
             )
-            del _
+            del _ # _ for the trajectory with 33 tensors of shape=[1, 658, 100]
 
-            generated = generated.to(torch.float32)  # generated mel spectrogram
-            generated = generated[:, ref_audio_len:, :]
+            generated = generated.to(torch.float32)  # generated mel spectrogram, [1, 658, 100] with the late 390 elements are for the generated audio mel spectrogram frame
+            generated = generated[:, ref_audio_len:, :] # ref_audio_len=267 ... Oh! generated.shape=[1, 391, 100]
             generated = generated.permute(0, 2, 1)
-            if mel_spec_type == "vocos":
-                generated_wave = vocoder.decode(generated)
+            if mel_spec_type == "vocos": # True, here
+                generated_wave = vocoder.decode(generated) # torch.Size([1, 99840])
             elif mel_spec_type == "bigvgan":
                 generated_wave = vocoder(generated)
             if rms < target_rms:
                 generated_wave = generated_wave * rms / target_rms
 
             # wav -> numpy
-            generated_wave = generated_wave.squeeze().cpu().numpy()
+            generated_wave = generated_wave.squeeze().cpu().numpy() # (99840,)
 
-            if streaming:
+            if streaming: # False
                 for j in range(0, len(generated_wave), chunk_size):
                     # NOTE yield generated_wave[j : j + chunk_size], target_sample_rate
                     return generated_wave[j : j + chunk_size], target_sample_rate
             else:
-                generated_cpu = generated[0].cpu().numpy()
+                generated_cpu = generated[0].cpu().numpy() # generated[0].shape=[100, 391]
                 del generated
                 # NOTE yield generated_wave, generated_cpu
-                return generated_wave, generated_cpu
+                return generated_wave, generated_cpu # (99840,) and (100, 391)
     # NOTE for 'streaming':
     if streaming:
         for gen_text in progress.tqdm(gen_text_batches) if progress is not None else gen_text_batches:
@@ -539,9 +547,9 @@ def infer_batch_process(
 
         #### for debug only  NOTE TODO ####
         for gen_text in gen_text_batches: # ['那是当然的啦，我们都找到了自己的真正的幸福。']
-            generated_wave, generated_mel_spec = process_batch(gen_text)
-            generated_waves.append(generated_wave)
-            spectrograms.append(generated_mel_spec)
+            generated_wave, generated_mel_spec = process_batch(gen_text) # NOTE TODO important here
+            generated_waves.append(generated_wave) # (99840,)是经过了vocoder之后的语音信息了，可以直接保存到.wav文件了
+            spectrograms.append(generated_mel_spec) # (100, 391) 是生成的梅尔谱张量
         #### end for debug only ####
 
         if generated_waves:

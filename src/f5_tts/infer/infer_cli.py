@@ -271,7 +271,7 @@ import ipdb; ipdb.set_trace()
 
 model_cfg = OmegaConf.load(
     args.model_cfg or config.get("model_cfg", str(files("f5_tts").joinpath(f"configs/{model}.yaml")))
-)
+) # args.model_cfg='/workspace/asr/F5-TTS/src/f5_tts/configs/F5TTS_v1_Base.yaml'
 model_cls = get_class(f"f5_tts.model.{model_cfg.model.backbone}") # 'DiT' - <class 'f5_tts.model.backbones.dit.DiT'>
 model_arc = model_cfg.model.arch # architecture parameters: {'dim': 1024, 'depth': 22, 'heads': 16, 'ff_mult': 2, 'text_dim': 512, 'text_mask_padding': True, 'qk_norm': None, 'conv_layers': 4, 'pe_attn_head': None, 'attn_backend': 'torch', 'attn_mask_enabled': False, 'checkpoint_activations': False}
 
@@ -299,11 +299,16 @@ elif ckpt_file.startswith("hf://"):
 if vocab_file.startswith("hf://"):
     vocab_file = str(cached_path(vocab_file))
 import ipdb; ipdb.set_trace()
-print(f"Using {model}...") # NOTE load the model here:
+print(f"Using {model}...") # NOTE load the model here: 初始化model对象：
 ema_model = load_model(
     model_cls, model_arc, ckpt_file, mel_spec_type=vocoder_name, vocab_file=vocab_file, device=device
 )
-
+# 1 model_cls=<class 'f5_tts.model.backbones.dit.DiT'>; 
+# 2 model_arc={'dim': 1024, 'depth': 22, 'heads': 16, 'ff_mult': 2, 'text_dim': 512, 'text_mask_padding': True, 'qk_norm': None, 'conv_layers': 4, 'pe_attn_head': None, 'attn_backend': 'torch', 'attn_mask_enabled': False, 'checkpoint_activations': False}
+# 3 ckpt_file='/workspace/asr/F5-TTS/ckpts/F5TTS_v1_Base/model_1250000.safetensors'
+# 4 mel_spec_type='vocos'
+# 5 vocab_file='/workspace/asr/F5-TTS/ckpts/F5TTS_v1_Base/vocab.txt'
+# 6 device='cuda'
 
 # inference process
 
@@ -376,16 +381,17 @@ def main():
                 final_sample_rate,
             )
 
+    import ipdb; ipdb.set_trace()
     if generated_audio_segments:
-        final_wave = np.concatenate(generated_audio_segments)
+        final_wave = np.concatenate(generated_audio_segments) # final_wave.shape=(99840,)
 
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
 
-        with open(wave_path, "wb") as f:
-            sf.write(f.name, final_wave, final_sample_rate)
+        with open(wave_path, "wb") as f: # wave_path=PosixPath('tests/infer_cli_basic.wav')
+            sf.write(f.name, final_wave, final_sample_rate) # file.name, (99840,), and sr=24k
             # Remove silence
-            if remove_silence:
+            if remove_silence: # False
                 remove_silence_for_generated_wav(f.name)
             print(f.name)
 

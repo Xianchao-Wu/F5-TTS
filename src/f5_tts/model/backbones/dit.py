@@ -84,35 +84,35 @@ class TextEmbedding(nn.Module):
         return upsampled_text
 
     def forward(self, text: int["b nt"], seq_len, drop_text=False):
-        text = text + 1  # use 0 as filler token. preprocess of batch pad -1, see list_str_to_idx()
+        text = text + 1  # TODO NOTE is there a pair of "+1" and "-1"??? use 0 as filler token. preprocess of batch pad -1, see list_str_to_idx()
         text = text[:, :seq_len]  # curtail if character tokens are more than the mel spec tokens
         text = F.pad(text, (0, seq_len - text.shape[1]), value=0)  # (opt.) if not self.average_upsampling:
         if self.mask_padding:
             text_mask = text == 0
-        import ipdb; ipdb.set_trace() # NOTE TODO 所以，这里，drop_text是的确把text设置为0了。
-        if drop_text:  # cfg for text
+        #import ipdb; ipdb.set_trace() # NOTE TODO 所以，这里，drop_text是的确把text设置为0了。
+        if drop_text:  # False, cfg for text
             text = torch.zeros_like(text)
 
-        text = self.text_embed(text)  # b n -> b n d
+        text = self.text_embed(text)  # b n -> b n d; [1, 658] --> Embedding(2546, 512) --> [1, 658, 512]
 
         # possible extra modeling
-        if self.extra_modeling:
+        if self.extra_modeling: # True NOTE
             # sinus pos emb
-            text = text + self.freqs_cis[:seq_len, :]
+            text = text + self.freqs_cis[:seq_len, :] # self.freqs_cis.shape=[8192, 512] 这是关于位置编码的; seq_len=658
 
             # convnextv2 blocks
-            if self.mask_padding:
-                text = text.masked_fill(text_mask.unsqueeze(-1).expand(-1, -1, text.size(-1)), 0.0)
-                for block in self.text_blocks:
+            if self.mask_padding: # True
+                text = text.masked_fill(text_mask.unsqueeze(-1).expand(-1, -1, text.size(-1)), 0.0) # 这里是，本来text里面的只有前71个位置有取值；然后加了位置编码之后，全部658个位置都有取值了；现在是进行了mask之后，还是只有前面的71个位置有取值，后面的位置都为0了。 NOTE
+                for block in self.text_blocks: # len(self.text_blocks)=4
                     text = block(text)
-                    text = text.masked_fill(text_mask.unsqueeze(-1).expand(-1, -1, text.size(-1)), 0.0)
+                    text = text.masked_fill(text_mask.unsqueeze(-1).expand(-1, -1, text.size(-1)), 0.0) # 有意思，这里的每次masked_fill都是把前71个位置 之外的其他位置的取值重新设置为0
             else:
                 text = self.text_blocks(text)
 
-        if self.average_upsampling:
+        if self.average_upsampling: # False TODO what for?
             text = self.average_upsample_text_by_mask(text, ~text_mask)
 
-        return text
+        return text # [1, 658, 512], 658里面只有前面71个位置是有值的，后面的位置都是full 0, since we used masked_fill() method, several times
 
 
 # noised input audio and context mixing embedding
@@ -127,18 +127,21 @@ class InputEmbedding(nn.Module):
     def forward(
         self,
         x: float["b n d"], # noisy audio, [1, 658, 100]
-        cond: float["b n d"], # ref audio + 0 of to-be-gen audio, [1, 658, 100]
-        text_embed: float["b n d"], # only the first 71 is with value, [1, 658, 100]
+        cond: float["b n d"], # ref audio [1, 268, 100] with value + 0 of to-be-gen audio [1, 390, 100] with 0 values, [1, 658, 100]
+        text_embed: float["b n d"], # only the first 71 is with value, [1, 658, 100], the rest 587 vectors are all 0
         drop_audio_cond=False, # False
         audio_mask: bool["b n"] | None = None, # None
     ):
+        #import ipdb; ipdb.set_trace()
         if drop_audio_cond:  # cfg for cond audio; False
             cond = torch.zeros_like(cond) # [1, 658, 100] all 0
 
         x = self.proj(torch.cat((x, cond, text_embed), dim=-1)) # NOTE TODO noisy_audio ref_audio+gen_audio text_embed --> [1, 658, 100], [1, 658, 100], [1, 658, 512] --> [1, 658, 712] --> 712 to 1024 --> [1, 658, 1024]
-        x = self.conv_pos_embed(x, mask=audio_mask) + x
+        x = self.conv_pos_embed(x, mask=audio_mask) + x # NOTE 基于卷积的位置编码 + 原来的x张量--》 融合了位置编码的张量，这个就很有意思了，在这里加入位置编码，是个很有意思的idea positional embedding
+
+        #import ipdb; ipdb.set_trace()
         return x # [1, 658, 1024]
-        # NOTE when drop_audio_cond, 只有中间的ref_audio is all 0 --> no --> Line 94 文本也是被设置为了0了！！！
+        # NOTE OK when drop_audio_cond, 只有中间的ref_audio is all 0 --> no --> Line 94 文本也是被设置为了0了！！！
 
 # Transformer backbone using DiT blocks
 
@@ -256,22 +259,22 @@ class DiT(nn.Module):
                     )
                     text_embed_list.append(text_embed_i[0])
                 text_embed = pad_sequence(text_embed_list, batch_first=True, padding_value=0)
-            if cache:
-                if drop_text:
+            if cache: # True
+                if drop_text: # False
                     self.text_uncond = text_embed
                 else:
-                    self.text_cond = text_embed
+                    self.text_cond = text_embed # 这是已经过了4层convnextv2了！以及经过了masked_fill()函数了。[1, 658, 512], only the first 71 are with values, the rest are all 0
 
         if cache:
-            if drop_text:
+            if drop_text: # False
                 text_embed = self.text_uncond
             else:
-                text_embed = self.text_cond # [1, 658, 512]
-        import ipdb; ipdb.set_trace()
+                text_embed = self.text_cond # [1, 658, 512]; 这个的取值和Line-263的一样呀！
+        #import ipdb; ipdb.set_trace()
         x = self.input_embed(x, cond, text_embed, drop_audio_cond=drop_audio_cond, audio_mask=audio_mask)
         # x=noised audio [1, 658, 100]; cond=ref audio + to-be-gen audio [1, 658, 100]; text_embed of [1, 658, 100] and only first 71 elements are with value; drop_audio_cond=False; audio_mask=None
         return x # x.shape=[1, 658, 1024], 这是按照最后一个dim对三个张量进行拼接!
-
+        # NOTE TODO 把这三个张量，在feature dimension维度进行拼接，目的是为了：在transformer的每一层self-attention中实现统一的多模态joint表示，使得velocity field可以直接建模： v(x_t, ref, text)，这个还是很有意思的 early fusion!
     def clear_cache(self):
         self.text_cond, self.text_uncond = None, None
     def forward(
@@ -286,20 +289,20 @@ class DiT(nn.Module):
         cfg_infer: bool = False,  # cfg inference, pack cond & uncond forward; True
         cache: bool = False, # True
     ):
-        import ipdb; ipdb.set_trace()
+        #import ipdb; ipdb.set_trace()
         batch, seq_len = x.shape[0], x.shape[1] # 1, 658
         if time.ndim == 0:
             time = time.repeat(batch) # tensor(0., device='cuda:0', dtype=torch.float16) --> tensor([0.], device='cuda:0', dtype=torch.float16)
 
         # t: conditioning time, text: text, x: noised audio + cond audio + text
         t = self.time_embed(time) # NOTE embed time, from shape=[1] to [1, 1024]
-        if cfg_infer:  # pack cond & uncond forward: b n d -> 2b n d
+        if cfg_infer:  # True, pack cond & uncond forward: b n d -> 2b n d
             x_cond = self.get_input_embed(
                 x, cond, text, drop_audio_cond=False, drop_text=False, cache=cache, audio_mask=mask
             ) # x=noised audio [1,658,100]; cond=masked cond audio [1,658,100] with 268 ref mel frames and 390 all-0 mel frames; text=[1,71] --> x_cond.shape=[1, 658, 712=100+100+512 for noisy audio, ref_audio+gen_audio, text_embed] 
             x_uncond = self.get_input_embed(
                 x, cond, text, drop_audio_cond=True, drop_text=True, cache=cache, audio_mask=mask
-            ) # NOTE TODO 上面的drop_text没有起到作用啊... 只有drop_audio_cond的时候，被设置为0了
+            ) # NOTE TODO 上面的drop_text没有起到作用啊[--> 起作用了! NOTE ]... 只有drop_audio_cond的时候，被设置为0了
             x = torch.cat((x_cond, x_uncond), dim=0) # [1, 658, 1024] + [1, 658, 1024] -> [2, 658, 1024]
             t = torch.cat((t, t), dim=0) # [2, 1024]
             mask = torch.cat((mask, mask), dim=0) if mask is not None else None # mask=None
@@ -307,12 +310,12 @@ class DiT(nn.Module):
             x = self.get_input_embed(
                 x, cond, text, drop_audio_cond=drop_audio_cond, drop_text=drop_text, cache=cache, audio_mask=mask
             )
-        import ipdb; ipdb.set_trace()
+        #import ipdb; ipdb.set_trace()
         rope = self.rotary_embed.forward_from_seq_len(seq_len) # seq_len=658, -> rope[0].shape=[1, 658, 64]
 
         if self.long_skip_connection is not None:
             residual = x
-        import ipdb; ipdb.set_trace()
+        #import ipdb; ipdb.set_trace()
         # block = <class 'f5_tts.model.modules.DiTBlock'>
         for block in self.transformer_blocks: # NOTE 22 blocks: AdaLayerNorm + self-Attention + LayerNorm + FeedForward
             if self.checkpoint_activations: # NOTE TODO False
@@ -320,10 +323,10 @@ class DiT(nn.Module):
                 x = torch.utils.checkpoint.checkpoint(self.ckpt_wrapper(block), x, t, mask, rope, use_reentrant=False)
             else:
                 x = block(x, t, mask=mask, rope=rope) # x.shape=[2, 658, 1024], t.shape=[2, 1024], mask=None, rope[0].shape=[1, 658, 64] --> output x.shape=[2, 658, 1024]
-        import ipdb; ipdb.set_trace()
-        if self.long_skip_connection is not None:
+        #import ipdb; ipdb.set_trace()
+        if self.long_skip_connection is not None: # NOTE TODO
             x = self.long_skip_connection(torch.cat((x, residual), dim=-1))
-        import ipdb; ipdb.set_trace()
+        #import ipdb; ipdb.set_trace()
         x = self.norm_out(x, t)
         output = self.proj_out(x) # Linear(in_features=1024, out_features=100, bias=True), from 1024 to 100 (mel dim)
 

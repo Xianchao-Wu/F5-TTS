@@ -312,14 +312,14 @@ class AdaLayerNorm(nn.Module):
         self.linear = nn.Linear(dim, dim * 6)
 
         self.norm = nn.LayerNorm(dim, elementwise_affine=False, eps=1e-6)
+    def forward(self, x, emb=None): # x.shape=[2, 658, 1024] which is a combination of three tensors, noisy-audio, ref-audio+gen_audio and ref-text+gen-text; after linear projection, we obtain current [2, 658, 1024];    emb=time.emb=[2, 1024] for one time point's embedding
+        #import ipdb; ipdb.set_trace()
+        emb = self.linear(self.silu(emb)) # NOTE self.linear = [1024, 6144], where 6144 = 1024 * 6
+        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = torch.chunk(emb, 6, dim=1) # NOTE TODO 这个还是第一次看到！！！ 融合time info到x的方法，很奇妙啊!!! msa三个；然后是mlp三个；分别是shift, scale, gate这三种
 
-    def forward(self, x, emb=None):
-        emb = self.linear(self.silu(emb))
-        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = torch.chunk(emb, 6, dim=1)
-
-        x = self.norm(x) * (1 + scale_msa[:, None]) + shift_msa[:, None]
+        x = self.norm(x) * (1 + scale_msa[:, None]) + shift_msa[:, None] # AdaLN(x, c) = (1+gamma(c)) * LN(x) + beta(c) where c is the condition time/emb here NOTE 
         return x, gate_msa, shift_mlp, scale_mlp, gate_mlp
-
+        # x.shape=[2, 658, 1024], gate_msa.shape=[2, 1024] = shift_mlp.shape = scale_mlp.shape = gate_mlp.shape 
 
 # AdaLayerNorm for final layer
 # return only with modulated x for attn input, cuz no more mlp modulation
@@ -335,6 +335,7 @@ class AdaLayerNorm_Final(nn.Module):
         self.norm = nn.LayerNorm(dim, elementwise_affine=False, eps=1e-6)
 
     def forward(self, x, emb):
+        #import ipdb; ipdb.set_trace() # TODO when to use AdaLayerNorm and when to use AdaLayerNorm_Final???
         emb = self.linear(self.silu(emb))
         scale, shift = torch.chunk(emb, 2, dim=1)
 
@@ -680,23 +681,23 @@ class DiTBlock(nn.Module):
         self.ff_norm = nn.LayerNorm(dim, elementwise_affine=False, eps=1e-6)
         self.ff = FeedForward(dim=dim, mult=ff_mult, dropout=dropout, approximate="tanh")
 
-    def forward(self, x, t, mask=None, rope=None):  # x: noised input, t: time embedding
-        import ipdb; ipdb.set_trace()
+    def forward(self, x, t, mask=None, rope=None):  # x: noised input [2, 658, 1024], t: time embedding [2, 1024] one time step! -> time embedding -> to current tensor
+        #import ipdb; ipdb.set_trace()
 
         # pre-norm & modulation for attention input
-        norm, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.attn_norm(x, emb=t)
-
+        norm, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.attn_norm(x, emb=t) # <class 'f5_tts.model.modules.AdaLayerNorm'> NOTE TODO combine time and noisy audio
+        #import ipdb; ipdb.set_trace()
         # attention
-        attn_output = self.attn(x=norm, mask=mask, rope=rope)
+        attn_output = self.attn(x=norm, mask=mask, rope=rope) # norm.shape=[2, 658, 1024] and rope[0].shape=[1,658,64] --> output attn_output.shape=[2, 658, 1024]
 
         # process attention output for input x
-        x = x + gate_msa.unsqueeze(1) * attn_output
-
-        norm = self.ff_norm(x) * (1 + scale_mlp[:, None]) + shift_mlp[:, None]
+        x = x + gate_msa.unsqueeze(1) * attn_output # NOTE gate_msa is important as a scalar to weight attn_output
+        #import ipdb; ipdb.set_trace()
+        norm = self.ff_norm(x) * (1 + scale_mlp[:, None]) + shift_mlp[:, None] # NOTE AdaLN(x, c)=(1+gamma(c))*LN(x) + beta(c) where c is the time/embed; scale_mlp=gamma, shift_mlp=beta both are from the former AdaLayerNorm's forward (Line 687, self.attn_norm)
         ff_output = self.ff(norm)
         x = x + gate_mlp.unsqueeze(1) * ff_output
-
-        return x
+        #import ipdb; ipdb.set_trace()
+        return x # [2, 658, 1024]
 
 
 # MMDiT Block https://arxiv.org/abs/2403.03206
