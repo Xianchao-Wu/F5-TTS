@@ -238,24 +238,24 @@ class CFM(nn.Module):
 
     def forward(
         self,
-        inp: float["b n d"] | float["b nw"],  # mel or raw wave
-        text: int["b nt"] | list[str],
+        inp: float["b n d"] | float["b nw"],  # mel or raw wave; curerntly mel-spectrogram [2, 528, 100]
+        text: int["b nt"] | list[str], # a list with 2 textual sequences
         *,
-        lens: int["b"] | None = None,
-        noise_scheduler: str | None = None,
+        lens: int["b"] | None = None, # lengths for the mel-spectrogram: [528, 121]
+        noise_scheduler: str | None = None, # None
     ):
         # handle raw wave
         if inp.ndim == 2:
             inp = self.mel_spec(inp)
             inp = inp.permute(0, 2, 1)
             assert inp.shape[-1] == self.num_channels
-
+        import ipdb; ipdb.set_trace()
         batch, seq_len, dtype, device, _σ1 = *inp.shape[:2], inp.dtype, self.device, self.sigma
-
+        # 2, 528, torch.float32, cuda:0, 0.0=self.sigma
         # handle text as string
         if isinstance(text, list):
             if exists(self.vocab_char_map):
-                text = list_str_to_idx(text, self.vocab_char_map).to(device)
+                text = list_str_to_idx(text, self.vocab_char_map).to(device) # [2, 97] with token.ids, and padding=-1
             else:
                 text = list_str_to_tensor(text).to(device)
             assert text.shape[0] == batch
@@ -263,48 +263,53 @@ class CFM(nn.Module):
         # lens and mask
         if not exists(lens):  # if lens not acquired by trainer from collate_fn
             lens = torch.full((batch,), seq_len, device=device)
-        mask = lens_to_mask(lens, length=seq_len)
+        mask = lens_to_mask(lens, length=seq_len) # [2, 528], and mask[0] all 528*True and mask[1] first 121*True and other spaces are all False, this mask is for length masking in current batch! NOTE
 
-        # get a random span to mask out for training conditionally
-        frac_lengths = torch.zeros((batch,), device=self.device).float().uniform_(*self.frac_lengths_mask)
-        rand_span_mask = mask_from_frac_lengths(lens, frac_lengths)
+        # get a random span (RANDOM SPAN) to mask out for training conditionally
+        frac_lengths = torch.zeros((batch,), device=self.device).float().uniform_(*self.frac_lengths_mask) # TODO what for? (0.7, 1.0) -> tensor([0.9656, 0.7461], device='cuda:0')
+        rand_span_mask = mask_from_frac_lengths(lens, frac_lengths) # [528, 121] + (0.9656, 0.7461) --> [509, 90] for the positions in the mel-spectrogram to be kept! NOTE TODO 从结果上看，是一个连续的区域被赋值为了False，也就是说被mask掉的梅尔谱，是连续的一个子区域！！！连续的！这个和论文里面的逻辑就对上了。
 
         if exists(mask):
-            rand_span_mask &= mask
+            rand_span_mask &= mask # rand_span_mask no change after & with mask! NO CHANGE
 
         # mel is x1
-        x1 = inp
+        x1 = inp # real-world data, audio mel spectrogram
 
         # x0 is gaussian noise
-        x0 = torch.randn_like(x1)
+        x0 = torch.randn_like(x1) # NOTE this is the pure noise audio sampled from Gaussian distribution!
 
         # time step
-        time = torch.rand((batch,), dtype=dtype, device=self.device)
+        time = torch.rand((batch,), dtype=dtype, device=self.device) # TODO 这个重要，这个是随机出来两个time points，供当前的一个batch中的两个样本使用。这个逻辑和diffusion model中的训练的逻辑是一样的; time=[0.0315, 0.2665] for different period of noise (different levels of noise during current x1-> x0 trajectory)
         # TODO. noise_scheduler
 
         # sample xt (φ_t(x) in the paper)
-        t = time.unsqueeze(-1).unsqueeze(-1)
-        φ = (1 - t) * x0 + t * x1
-        flow = x1 - x0
+        t = time.unsqueeze(-1).unsqueeze(-1) # t.shape=[2, 1, 1]
+        φ = (1 - t) * x0 + t * x1 # (1-t)*noise + t*data
+        flow = x1 - x0 # derivation on t of Line 287 results x1 - x0! data - noise! target - source! NOTE TODO flow.shape=[2, 528, 100]
 
         # only predict what is within the random mask span for infilling
-        cond = torch.where(rand_span_mask[..., None], torch.zeros_like(x1), x1)
+        cond = torch.where(rand_span_mask[..., None], torch.zeros_like(x1), x1) # where(cond, x, y) and when cond=True, return x part; otherwise return y part NOTE TODO 从这里可以看到，这里的cond是把大部分的内容都设置为了0了，也就是说，当rand_span_mask=True的时候，是设置为0, mask掉了；如果是rand_span_mask=False的时候，则表示是使用real data x1的内容了。所以，看到cond的结果是的确是大部分都设置为了0了，等待模型的下一步的预测了。 seq0 masked 509 elements of 528 elements in total; and seq1 masked 90 elements of 121 elements in total; 96.4% and 74.4% which are hugh
 
         # transformer and cfg training with a drop rate
-        drop_audio_cond = random() < self.audio_drop_prob  # p_drop in voicebox paper
-        if random() < self.cond_drop_prob:  # p_uncond in voicebox paper
+        drop_audio_cond = random() < self.audio_drop_prob  # p_drop in voicebox paper; this time drop_audio_cond=False
+        if random() < self.cond_drop_prob:  # p_uncond in voicebox paper NOTE very important!
             drop_audio_cond = True
             drop_text = True
         else:
             drop_text = False
-
+        import ipdb; ipdb.set_trace()
         # apply mask will use more memory; might adjust batchsize or batchsampler long sequence threshold
         pred = self.transformer(
             x=φ, cond=cond, text=text, time=time, drop_audio_cond=drop_audio_cond, drop_text=drop_text, mask=mask
-        )
-
+        ) # forward() method in <class 'f5_tts.model.backbones.dit.DiT'> 1. x=noisy audio of shape=[2, 528, 100], 2. cond.shape=[2,528,100] 有意思了，这个是把一部分语音mask之后的结果，作为条件！！！在inference的时候，是ref_audio_mel+to-be-gen_audio_mel all 0; NOTE TODO 3. text.shape=[2, 97] are token.ids, before textual embedding! 4. time.shape=[2] with a batch of randomly generated timepoints for current datasets! NOTE this is only one time point for one sequence; not a time schedule! 5. drop_audio_cond=False, 6. drop_text=False, 7. mask.lengths=[528, 121] ---> pred.shape=[2, 528, 100] is the predicted noisy audio
+        import ipdb; ipdb.set_trace()
         # flow matching loss
-        loss = F.mse_loss(pred, flow, reduction="none")
-        loss = loss[rand_span_mask]
+        loss = F.mse_loss(pred, flow, reduction="none") # NOTE TODO okay I see now, pred=predicated noisy audio; and flow = reference (training target which is made up on-the-fly! interesting); output loss.shape=[2, 528, 100]
+        loss = loss[rand_span_mask] # rand_span_mask with 509/90 elements for the two sequences; meaning that we are predicting these 509/90 elements in the noisy audio. Thus, we only compute the losses of the masked places.
 
+        import ipdb; ipdb.set_trace()
         return loss.mean(), cond, pred
+        # loss.mean() -> tensor(5.2501, device='cuda:0', grad_fn=<MeanBackward0>)
+        # cond.shape=[2, 528, 100], 只留下少数没有被mask掉的mel frames作为参考, alike ref_audio+to-be-gen audio in the inference step! NOTE
+        # pred.shape=[2, 528, 100] the prediction output of the self.transformer: DiT module
+

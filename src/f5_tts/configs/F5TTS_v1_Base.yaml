@@ -5,8 +5,8 @@ hydra:
 datasets:
   name: LibriTTS # TODO Emilia_ZH_EN  # dataset name
   batch_size_per_gpu: 2 # TODO 38400  # 8 GPUs, 8 * 38400 = 307200
-  batch_size_type: frame  # frame | sample
-  max_samples: 2 # TODO 64  # max sequences per batch if use frame-wise batch_size. we set 32 for small models, 64 for base models
+  batch_size_type: sample #frame  # frame | sample
+  max_samples: 2 #128 # TODO 64  # max sequences per batch if use frame-wise batch_size. we set 32 for small models, 64 for base models
   num_workers: 1 # TODO 16
 
 optim:
@@ -19,8 +19,8 @@ optim:
 
 model:
   name: F5TTS_v1_Base  # model name
-  tokenizer: pinyin  # tokenizer type
-  tokenizer_path: null  # if 'custom' tokenizer, define the path want to use (should be vocab.txt)
+  tokenizer: custom #pinyin  # tokenizer type
+  tokenizer_path: /workspace/asr/F5-TTS/ckpts/F5TTS_v1_Base/vocab.txt #null  # if 'custom' tokenizer, define the path want to use (should be vocab.txt)
   backbone: DiT
   arch:
     dim: 1024
@@ -47,7 +47,7 @@ model:
     local_path: null  # local vocoder path
 
 ckpts:
-  logger: wandb  # wandb | tensorboard | null
+  logger: tensorboard #wandb  # wandb | tensorboard | null
   log_samples: True  # infer random sample per save checkpoint. wip, normal to fail with extra long samples
   save_per_updates: 50000  # save checkpoint per updates
   keep_last_n_checkpoints: -1  # -1 to keep all, 0 to not save intermediate, > 0 to keep last N checkpoints

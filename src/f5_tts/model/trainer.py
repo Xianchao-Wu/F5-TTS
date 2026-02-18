@@ -22,7 +22,6 @@ from f5_tts.model.utils import default, exists
 
 # trainer
 
-
 class Trainer:
     def __init__(
         self,
@@ -54,7 +53,8 @@ class Trainer:
         local_vocoder_path: str = "",  # local vocoder path
         model_cfg_dict: dict = dict(),  # training config
     ):
-        ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
+        import ipdb; ipdb.set_trace()
+        ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True) # NOTE DistributedDataParallelKwargs(dim=0, broadcast_buffers=True, bucket_cap_mb=25, find_unused_parameters=True, check_reduction=False, gradient_as_bucket_view=False, static_graph=False, comm_hook=<DDPCommunicationHookType.NO: 'no'>, comm_wrapper=<DDPCommunicationHookType.NO: 'no'>, comm_state_option={})
 
         if logger == "wandb" and not wandb.api.api_key:
             logger = None
@@ -64,8 +64,8 @@ class Trainer:
             log_with=logger if logger == "wandb" else None,
             kwargs_handlers=[ddp_kwargs],
             gradient_accumulation_steps=grad_accumulation_steps,
-            **accelerate_kwargs,
-        )
+            **accelerate_kwargs, # {}
+        ) # NOTE TODO
 
         self.logger = logger
         if self.logger == "wandb":
@@ -98,13 +98,13 @@ class Trainer:
 
             self.writer = None
             if self.accelerator.is_main_process:
-                self.writer = SummaryWriter(log_dir=f"runs/{wandb_run_name}")
+                self.writer = SummaryWriter(log_dir=f"runs/{wandb_run_name}") # wandb_run_name='F5TTS_v1_Base_vocos_custom_LibriTTS'
 
         self.model = model
-
+        import ipdb; ipdb.set_trace()
         if self.is_main:
-            self.ema_model = EMA(model, include_online_model=False, **ema_kwargs)
-            self.ema_model.to(self.accelerator.device)
+            self.ema_model = EMA(model, include_online_model=False, **ema_kwargs) # ema_kwargs={}; <class 'ema_pytorch.ema_pytorch.EMA'> for self.ema_model
+            self.ema_model.to(self.accelerator.device) # device(type='cuda')
 
             print(f"Using logger: {logger}")
             if grad_accumulation_steps > 1:
@@ -130,16 +130,17 @@ class Trainer:
         self.is_local_vocoder = is_local_vocoder
         self.local_vocoder_path = local_vocoder_path
 
-        self.noise_scheduler = noise_scheduler
+        self.noise_scheduler = noise_scheduler # None
 
-        self.duration_predictor = duration_predictor
+        self.duration_predictor = duration_predictor # None
 
-        if bnb_optimizer:
+        if bnb_optimizer: # False
             import bitsandbytes as bnb
 
             self.optimizer = bnb.optim.AdamW8bit(model.parameters(), lr=learning_rate)
         else:
             self.optimizer = AdamW(model.parameters(), lr=learning_rate)
+        import ipdb; ipdb.set_trace()
         self.model, self.optimizer = self.accelerator.prepare(self.model, self.optimizer)
 
     @property
@@ -262,17 +263,18 @@ class Trainer:
         return update
 
     def train(self, train_dataset: Dataset, num_workers=16, resumable_with_seed: int = None):
-        if self.log_samples:
+        import ipdb; ipdb.set_trace()
+        if self.log_samples: # True in NOTE
             from f5_tts.infer.utils_infer import cfg_strength, load_vocoder, nfe_step, sway_sampling_coef
 
             vocoder = load_vocoder(
                 vocoder_name=self.vocoder_name, is_local=self.is_local_vocoder, local_path=self.local_vocoder_path
-            )
-            target_sample_rate = self.accelerator.unwrap_model(self.model).mel_spec.target_sample_rate
-            log_samples_path = f"{self.checkpoint_path}/samples"
+            ) # self.vocoder_name='vocos', self.is_local_vocoder=False, self.local_vocoder_path=None
+            target_sample_rate = self.accelerator.unwrap_model(self.model).mel_spec.target_sample_rate # 24000
+            log_samples_path = f"{self.checkpoint_path}/samples" # '/workspace/asr/F5-TTS/src/f5_tts/../../ckpts/F5TTS_v1_Base_vocos_custom_LibriTTS/samples'
             os.makedirs(log_samples_path, exist_ok=True)
 
-        if exists(resumable_with_seed):
+        if exists(resumable_with_seed): # resumable_with_seed=666
             generator = torch.Generator()
             generator.manual_seed(resumable_with_seed)
         else:
@@ -289,16 +291,17 @@ class Trainer:
                 shuffle=True,
                 generator=generator,
             )
-        elif self.batch_size_type == "frame":
+        elif self.batch_size_type == "frame": # NOTE here
             self.accelerator.even_batches = False
             sampler = SequentialSampler(train_dataset)
+            import ipdb; ipdb.set_trace()
             batch_sampler = DynamicBatchSampler(
                 sampler,
                 self.batch_size_per_gpu,
-                max_samples=self.max_samples,
-                random_seed=resumable_with_seed,  # This enables reproducible shuffling
+                max_samples=self.max_samples, # 128 now (was 2...;  2--> 128, not working?)
+                random_seed=resumable_with_seed,  # This enables reproducible shuffling; random_seed=666
                 drop_residual=False,
-            )
+            ) # NOTE here took a lot of time for processing the samples in the dataset! TODO Creating dynamic batches with 2 audio frames per gpu: 100%|█████████████████████| 354218/354218 [00:00<00:00, 1669156.65it/s] where is this log info come from?
             train_dataloader = DataLoader(
                 train_dataset,
                 collate_fn=collate_fn,
@@ -309,14 +312,14 @@ class Trainer:
             )
         else:
             raise ValueError(f"batch_size_type must be either 'sample' or 'frame', but received {self.batch_size_type}")
-
+        import ipdb; ipdb.set_trace()
         #  accelerator.prepare() dispatches batches to devices;
         #  which means the length of dataloader calculated before, should consider the number of devices
         warmup_updates = (
-            self.num_warmup_updates * self.accelerator.num_processes
+            self.num_warmup_updates * self.accelerator.num_processes # 20000 * 1
         )  # consider a fixed warmup steps while using accelerate multi-gpu ddp
         # otherwise by default with split_batches=False, warmup steps change with num_processes
-        total_updates = math.ceil(len(train_dataloader) / self.grad_accumulation_steps) * self.epochs
+        total_updates = math.ceil(len(train_dataloader) / self.grad_accumulation_steps) * self.epochs # TODO NOTE why len(train_dataloader)=0? is this because we only keep 2 audio frames per gpu???
         decay_updates = total_updates - warmup_updates
         warmup_scheduler = LinearLR(self.optimizer, start_factor=1e-8, end_factor=1.0, total_iters=warmup_updates)
         decay_scheduler = LinearLR(self.optimizer, start_factor=1.0, end_factor=1e-8, total_iters=decay_updates)
@@ -328,17 +331,18 @@ class Trainer:
         )  # actual multi_gpu updates = single_gpu updates / gpu nums
         start_update = self.load_checkpoint()
         global_update = start_update
-
+        import ipdb; ipdb.set_trace()
         if exists(resumable_with_seed):
             orig_epoch_step = len(train_dataloader)
             start_step = start_update * self.grad_accumulation_steps
-            skipped_epoch = int(start_step // orig_epoch_step)
-            skipped_batch = start_step % orig_epoch_step
+            skipped_epoch = int(start_step // orig_epoch_step) if orig_epoch_step > 0 else 0
+            skipped_batch = start_step % orig_epoch_step if orig_epoch_step > 0 else 0
             skipped_dataloader = self.accelerator.skip_first_batches(train_dataloader, num_batches=skipped_batch)
         else:
             skipped_epoch = 0
 
-        for epoch in range(skipped_epoch, self.epochs):
+        for epoch in range(skipped_epoch, self.epochs): # range(0, 11)
+            import ipdb; ipdb.set_trace()
             self.model.train()
             if exists(resumable_with_seed) and epoch == skipped_epoch:
                 progress_bar_initial = math.ceil(skipped_batch / self.grad_accumulation_steps)
@@ -358,23 +362,24 @@ class Trainer:
                 disable=not self.accelerator.is_local_main_process,
                 initial=progress_bar_initial,
             )
-
+            # batch: dict_keys(['mel', 'mel_lengths', 'text', 'text_lengths']); 'mel': [2, 100, 528], 'mel_lengths': tensor of shape [2], 'text': list with two textual sequences, 'text_lengths': tensor of shape [2] 
             for batch in current_dataloader:
+                import ipdb; ipdb.set_trace()
                 with self.accelerator.accumulate(self.model):
-                    text_inputs = batch["text"]
-                    mel_spec = batch["mel"].permute(0, 2, 1)
-                    mel_lengths = batch["mel_lengths"]
+                    text_inputs = batch["text"] # a list with two textual sequences
+                    mel_spec = batch["mel"].permute(0, 2, 1) # [2, 528, 100] where 2=batch.size, 528=frame.num, 100=mel.spectrogram.frame.feature.dimension
+                    mel_lengths = batch["mel_lengths"] # tensor([528, 121], device='cuda:0'); shape=[2]
 
-                    # TODO. add duration predictor training
+                    # TODO. add duration predictor training; currently self.duration_predictor=None
                     if self.duration_predictor is not None and self.accelerator.is_local_main_process:
                         dur_loss = self.duration_predictor(mel_spec, lens=batch.get("durations"))
                         self.accelerator.log({"duration loss": dur_loss.item()}, step=global_update)
-
+                    import ipdb; ipdb.set_trace()
                     loss, cond, pred = self.model(
                         mel_spec, text=text_inputs, lens=mel_lengths, noise_scheduler=self.noise_scheduler
-                    )
+                    ) # mel_spec.shape=[2, 528, 100]; text_inputs=a list with 2 sequences; mel_lengths=[528, 121], self.noise_scheduler=None
                     self.accelerator.backward(loss)
-
+                    import ipdb; ipdb.set_trace()
                     if self.max_grad_norm > 0 and self.accelerator.sync_gradients:
                         self.accelerator.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
 
@@ -435,7 +440,7 @@ class Trainer:
                             f"{log_samples_path}/update_{global_update}_ref.wav", ref_audio, target_sample_rate
                         )
                         self.model.train()
-
+        import ipdb; ipdb.set_trace()
         self.save_checkpoint(global_update, last=True)
 
         self.accelerator.end_training()

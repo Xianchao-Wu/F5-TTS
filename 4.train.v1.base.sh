@@ -9,7 +9,8 @@
 #accelerate launch src/f5_tts/train/train.py --config-name F5TTS_v1_Base.yaml
 #accelerate launch 
 
-config="src/f5_tts/configs/F5TTS_v1_Base.yaml"
+#config="//workspace/asr/F5-TTS/src/f5_tts/configs/F5TTS_v1_Base.yaml"
+config="F5TTS_v1_Base.yaml"
 
 CUDA_VISIBLE_DEVICES=7 python -m ipdb \
     src/f5_tts/train/train.py --config-name $config 

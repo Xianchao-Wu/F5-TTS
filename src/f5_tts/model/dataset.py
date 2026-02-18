@@ -252,30 +252,30 @@ def load_dataset(
     dataset_type    - "CustomDataset" if you want to use tokenizer name and default data path to load for train_dataset
                     - "CustomDatasetPath" if you just want to pass the full path to a preprocessed dataset without relying on tokenizer
     """
-
+    import ipdb; ipdb.set_trace()
     print("Loading dataset ...")
 
     if dataset_type == "CustomDataset":
-        rel_data_path = str(files("f5_tts").joinpath(f"../../data/{dataset_name}_{tokenizer}"))
-        if audio_type == "raw":
+        rel_data_path = str(files("f5_tts").joinpath(f"../../data/{dataset_name}_{tokenizer}")) # '/workspace/asr/F5-TTS/src/f5_tts/../../data/LibriTTS_custom'
+        if audio_type == "raw": # NOTE here
             try:
-                train_dataset = load_from_disk(f"{rel_data_path}/raw")
+                train_dataset = load_from_disk(f"{rel_data_path}/raw") # FileNotFoundError: Directory /workspace/asr/F5-TTS/src/f5_tts/../../data/LibriTTS_custom/raw not found -> Error here
             except:  # noqa: E722
-                train_dataset = Dataset_.from_file(f"{rel_data_path}/raw.arrow")
+                train_dataset = Dataset_.from_file(f"{rel_data_path}/raw.arrow") # NOTE okay here, len(train_dataset) = 354,218=354k samples
             preprocessed_mel = False
         elif audio_type == "mel":
             train_dataset = Dataset_.from_file(f"{rel_data_path}/mel.arrow")
             preprocessed_mel = True
         with open(f"{rel_data_path}/duration.json", "r", encoding="utf-8") as f:
             data_dict = json.load(f)
-        durations = data_dict["duration"]
+        durations = data_dict["duration"] # with 354,218 samples
         train_dataset = CustomDataset(
-            train_dataset,
-            durations=durations,
-            preprocessed_mel=preprocessed_mel,
-            mel_spec_module=mel_spec_module,
-            **mel_spec_kwargs,
-        )
+            train_dataset, # <class 'datasets.arrow_dataset.Dataset'>
+            durations=durations, # list, durations[0]=2.13, ... sum of duration=1,994,706 seconds, 554 hours; avg=5.63 seconds
+            preprocessed_mel=preprocessed_mel, # False
+            mel_spec_module=mel_spec_module, # None
+            **mel_spec_kwargs, # {'target_sample_rate': 24000, 'n_mel_channels': 100, 'hop_length': 256, 'win_length': 1024, 'n_fft': 1024, 'mel_spec_type': 'vocos'} arguments for mel spectrogram 
+        ) # <f5_tts.model.dataset.CustomDataset object at 0x7efd0042fd90>
 
     elif dataset_type == "CustomDatasetPath":
         try:
@@ -299,8 +299,8 @@ def load_dataset(
         train_dataset = HFDataset(
             load_dataset(f"{pre}/{pre}", split=f"train.{post}", cache_dir=str(files("f5_tts").joinpath("../../data"))),
         )
-
-    return train_dataset
+    import ipdb; ipdb.set_trace()
+    return train_dataset # len(train_dataset)=354,218 items 到这里还是正常的
 
 
 # collation
