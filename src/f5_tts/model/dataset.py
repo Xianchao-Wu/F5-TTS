@@ -175,6 +175,7 @@ class DynamicBatchSampler(Sampler[list[int]]):
     def __init__(
         self, sampler: Sampler[int], frames_threshold: int, max_samples=0, random_seed=None, drop_residual: bool = False
     ):
+        import ipdb; ipdb.set_trace()
         self.sampler = sampler
         self.frames_threshold = frames_threshold
         self.max_samples = max_samples
